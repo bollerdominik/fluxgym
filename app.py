@@ -903,6 +903,27 @@ class CaptionRequest(BaseModel):
     temp_directory: str
     concept_sentence: Optional[str] = None
 
+class TrainingRequest(BaseModel):
+    temp_directory: str
+    captions: List[str]
+    lora_name: str
+    concept_sentence: str
+    base_model: str = "flux-dev"
+    resolution: int = 512
+    num_repeats: int = 10
+    max_train_epochs: int = 16
+    vram: str = "20G"
+    sample_prompts: str = ""
+    sample_every_n_steps: int = 0
+    # Advanced parameters with defaults
+    seed: int = 42
+    workers: int = 2
+    learning_rate: str = "8e-4"
+    save_every_n_epochs: int = 4
+    guidance_scale: float = 1.0
+    timestep_sampling: str = "shift"
+    network_dim: int = 4
+
 @app.post("/api/upload")
 async def upload_files(files: List[UploadFile] = File(...)):
     """Upload files and return their paths."""
@@ -961,6 +982,96 @@ async def generate_captions(request: CaptionRequest):
             "concept_sentence": request.concept_sentence,
             "processed_files": [os.path.basename(path) for path in valid_image_paths]
         })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/start_training")
+async def api_start_training(request: TrainingRequest):
+    """Start training a LoRA using the uploaded images and captions."""
+    try:
+        # Verify temp directory exists
+        if not os.path.exists(request.temp_directory):
+            raise HTTPException(status_code=400, detail="Temp directory not found")
+        
+        # Get image files from temp directory
+        image_files = []
+        for filename in os.listdir(request.temp_directory):
+            file_path = os.path.join(request.temp_directory, filename)
+            if os.path.isfile(file_path) and any(filename.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.bmp', '.webp']):
+                image_files.append(file_path)
+        
+        if not image_files:
+            raise HTTPException(status_code=400, detail="No image files found in temp directory")
+        
+        # Sort for consistent ordering
+        image_files.sort()
+        
+        # Verify we have captions for all images
+        if len(request.captions) != len(image_files):
+            raise HTTPException(status_code=400, detail=f"Mismatch: {len(image_files)} images but {len(request.captions)} captions")
+        
+        # Create dataset folder
+        output_name = slugify(request.lora_name)
+        dataset_folder = f"datasets/{output_name}"
+        
+        # Call create_dataset function
+        dataset_path = create_dataset(dataset_folder, request.resolution, image_files, *request.captions)
+        
+        # Generate training script and config
+        sh = gen_sh(
+            request.base_model,
+            output_name,
+            request.resolution,
+            request.seed,
+            request.workers,
+            request.learning_rate,
+            request.network_dim,
+            request.max_train_epochs,
+            request.save_every_n_epochs,
+            request.timestep_sampling,
+            request.guidance_scale,
+            request.vram,
+            request.sample_prompts,
+            request.sample_every_n_steps,
+        )
+        
+        toml_config = gen_toml(
+            dataset_folder,
+            request.resolution,
+            request.concept_sentence,
+            request.num_repeats
+        )
+        
+        # Start training in background (since it's a long-running process)
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def run_training():
+            # Create a generator from start_training and consume it
+            training_generator = start_training(
+                request.base_model,
+                request.lora_name,
+                sh,
+                toml_config,
+                request.sample_prompts,
+            )
+            # Consume the generator to completion
+            for _ in training_generator:
+                pass
+        
+        # Run training in background thread
+        executor = ThreadPoolExecutor(max_workers=1)
+        asyncio.get_event_loop().run_in_executor(executor, run_training)
+        
+        return JSONResponse({
+            "success": True,
+            "message": "Training started successfully",
+            "lora_name": request.lora_name,
+            "output_name": output_name,
+            "dataset_folder": dataset_path,
+            "expected_output": f"outputs/{output_name}/"
+        })
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
