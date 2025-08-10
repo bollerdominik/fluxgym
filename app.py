@@ -903,9 +903,14 @@ class CaptionRequest(BaseModel):
     temp_directory: str
     concept_sentence: Optional[str] = None
 
+class ImageCaptionPair(BaseModel):
+    filename: str
+    full_path: str
+    caption: str
+
 class TrainingRequest(BaseModel):
     temp_directory: str
-    captions: List[str]
+    image_caption_pairs: List[ImageCaptionPair]
     lora_name: str
     concept_sentence: str
     base_model: str = "flux-dev"
@@ -976,11 +981,19 @@ async def generate_captions(request: CaptionRequest):
         for caption_result in run_captioning(valid_image_paths, request.concept_sentence or "", *captions):
             final_captions = list(caption_result)
         
+        # Create explicit image-caption pairs
+        image_caption_pairs = []
+        for i, image_path in enumerate(valid_image_paths):
+            image_caption_pairs.append({
+                "filename": os.path.basename(image_path),
+                "full_path": image_path,
+                "caption": final_captions[i]
+            })
+        
         return JSONResponse({
             "success": True,
-            "captions": final_captions,
-            "concept_sentence": request.concept_sentence,
-            "processed_files": [os.path.basename(path) for path in valid_image_paths]
+            "image_caption_pairs": image_caption_pairs,
+            "concept_sentence": request.concept_sentence
         })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -993,29 +1006,31 @@ async def api_start_training(request: TrainingRequest):
         if not os.path.exists(request.temp_directory):
             raise HTTPException(status_code=400, detail="Temp directory not found")
         
-        # Get image files from temp directory
+        # Verify all image files exist and extract paths and captions in the correct order
         image_files = []
-        for filename in os.listdir(request.temp_directory):
-            file_path = os.path.join(request.temp_directory, filename)
-            if os.path.isfile(file_path) and any(filename.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.bmp', '.webp']):
-                image_files.append(file_path)
+        captions = []
+        
+        for pair in request.image_caption_pairs:
+            # Verify the file exists in temp directory
+            if not os.path.exists(pair.full_path):
+                raise HTTPException(status_code=400, detail=f"Image file not found: {pair.filename}")
+            
+            # Verify it's in the expected temp directory
+            if not pair.full_path.startswith(request.temp_directory):
+                raise HTTPException(status_code=400, detail=f"Image file not in temp directory: {pair.filename}")
+            
+            image_files.append(pair.full_path)
+            captions.append(pair.caption)
         
         if not image_files:
-            raise HTTPException(status_code=400, detail="No image files found in temp directory")
-        
-        # Sort for consistent ordering
-        image_files.sort()
-        
-        # Verify we have captions for all images
-        if len(request.captions) != len(image_files):
-            raise HTTPException(status_code=400, detail=f"Mismatch: {len(image_files)} images but {len(request.captions)} captions")
+            raise HTTPException(status_code=400, detail="No image files provided")
         
         # Create dataset folder
         output_name = slugify(request.lora_name)
         dataset_folder = f"datasets/{output_name}"
         
-        # Call create_dataset function
-        dataset_path = create_dataset(dataset_folder, request.resolution, image_files, *request.captions)
+        # Call create_dataset function with properly ordered captions
+        dataset_path = create_dataset(dataset_folder, request.resolution, image_files, *captions)
         
         # Generate training script and config
         sh = gen_sh(
