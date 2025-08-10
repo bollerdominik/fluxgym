@@ -21,6 +21,11 @@ from argparse import Namespace
 import train_network
 import toml
 import re
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi.responses import JSONResponse
+from typing import List, Optional
+from pydantic import BaseModel
+import tempfile
 MAX_IMAGES = 150
 
 with open('models.yaml', 'r') as file:
@@ -890,6 +895,75 @@ function() {
 current_account = account_hf()
 print(f"current_account={current_account}")
 
+# FastAPI app for API endpoints
+app = FastAPI(title="FluxGym API", version="1.0.0")
+
+# Pydantic models for request bodies
+class CaptionRequest(BaseModel):
+    temp_directory: str
+    concept_sentence: Optional[str] = None
+
+@app.post("/api/upload")
+async def upload_files(files: List[UploadFile] = File(...)):
+    """Upload files and return their paths."""
+    try:
+        uploaded_paths = []
+        temp_dir = tempfile.mkdtemp()
+        
+        for file in files:
+            if file.filename:
+                file_path = os.path.join(temp_dir, file.filename)
+                with open(file_path, "wb") as buffer:
+                    content = await file.read()
+                    buffer.write(content)
+                uploaded_paths.append(file_path)
+        
+        return JSONResponse({
+            "success": True,
+            "uploaded_files": uploaded_paths,
+            "temp_directory": temp_dir
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/generate_captions")
+async def generate_captions(request: CaptionRequest):
+    """Generate captions for uploaded images using run_captioning."""
+    try:
+        # Verify temp directory exists
+        if not os.path.exists(request.temp_directory):
+            raise HTTPException(status_code=400, detail="Temp directory not found")
+        
+        # Find all image files in the temp directory
+        valid_image_paths = []
+        for filename in os.listdir(request.temp_directory):
+            file_path = os.path.join(request.temp_directory, filename)
+            if os.path.isfile(file_path) and any(filename.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.bmp', '.webp']):
+                valid_image_paths.append(file_path)
+        
+        if not valid_image_paths:
+            raise HTTPException(status_code=400, detail="No valid image files found in temp directory")
+        
+        # Sort for consistent ordering
+        valid_image_paths.sort()
+        
+        # Initialize captions list
+        captions = [""] * len(valid_image_paths)
+        
+        # Call the existing run_captioning function
+        final_captions = []
+        for caption_result in run_captioning(valid_image_paths, request.concept_sentence or "", *captions):
+            final_captions = list(caption_result)
+        
+        return JSONResponse({
+            "success": True,
+            "captions": final_captions,
+            "concept_sentence": request.concept_sentence,
+            "processed_files": [os.path.basename(path) for path in valid_image_paths]
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
     with gr.Tabs() as tabs:
         with gr.TabItem("Gym"):
@@ -1115,5 +1189,21 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
     demo.load(fn=loaded, js=js, outputs=[hf_token, hf_login, hf_logout, repo_owner])
     refresh.click(update, inputs=listeners, outputs=[train_script, train_config, dataset_folder])
 if __name__ == "__main__":
+    import uvicorn
+    from fastapi.middleware.cors import CORSMiddleware
+    
+    # Add CORS middleware to FastAPI
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    
+    # Mount Gradio app on FastAPI
     cwd = os.path.dirname(os.path.abspath(__file__))
-    demo.launch(debug=True, show_error=True, allowed_paths=[cwd])
+    gradio_app = gr.mount_gradio_app(app, demo, path="/", allowed_paths=[cwd])
+    
+    # Run the combined app
+    uvicorn.run(gradio_app, host="0.0.0.0", port=7860)
