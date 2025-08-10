@@ -12,6 +12,7 @@ import uuid
 import shutil
 import json
 import yaml
+import time
 from slugify import slugify
 from transformers import AutoProcessor, AutoModelForCausalLM
 from gradio_logsview import LogsView, LogsViewRunner
@@ -931,17 +932,26 @@ class TrainingRequest(BaseModel):
 
 @app.post("/api/upload")
 async def upload_files(files: List[UploadFile] = File(...)):
-    """Upload files and return their paths."""
+    """Upload files and return their paths with unique naming similar to Gradio."""
     try:
         uploaded_paths = []
         temp_dir = tempfile.mkdtemp()
         
-        for file in files:
+        for i, file in enumerate(files):
             if file.filename:
-                file_path = os.path.join(temp_dir, file.filename)
+                # Get original extension
+                original_ext = os.path.splitext(file.filename)[1].lower()
+                
+                # Create a unique filename similar to how Gradio handles uploads
+                # Generate unique filename with timestamp and index to avoid conflicts
+                unique_filename = f"upload_{int(time.time())}_{i}{original_ext}"
+                file_path = os.path.join(temp_dir, unique_filename)
+                
+                # Write file content
                 with open(file_path, "wb") as buffer:
                     content = await file.read()
                     buffer.write(content)
+                
                 uploaded_paths.append(file_path)
         
         return JSONResponse({
