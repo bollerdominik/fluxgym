@@ -22,7 +22,7 @@ from argparse import Namespace
 import train_network
 import toml
 import re
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Request
 from fastapi.responses import JSONResponse
 from typing import List, Optional
 from pydantic import BaseModel
@@ -899,6 +899,18 @@ print(f"current_account={current_account}")
 # FastAPI app for API endpoints
 app = FastAPI(title="FluxGym API", version="1.0.0")
 
+# Custom exception handler for request validation errors
+from fastapi.exceptions import RequestValidationError
+from starlette.responses import JSONResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    print(f"Request validation error: {exc}")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": "Invalid request format. Please check your request data."}
+    )
+
 # Pydantic models for request bodies
 class CaptionRequest(BaseModel):
     temp_directory: str
@@ -931,28 +943,35 @@ class TrainingRequest(BaseModel):
     network_dim: int = 4
 
 @app.post("/api/upload")
-async def upload_files(files: List[UploadFile] = File(...)):
+async def upload_files(request: Request):
     """Upload files and return their paths with unique naming similar to Gradio."""
     try:
+        from starlette.datastructures import UploadFile as StarletteUploadFile
+        
         uploaded_paths = []
         temp_dir = tempfile.mkdtemp()
         
-        for i, file in enumerate(files):
-            if file.filename:
-                # Get original extension
-                original_ext = os.path.splitext(file.filename)[1].lower()
-                
-                # Create a unique filename similar to how Gradio handles uploads
-                # Generate unique filename with timestamp and index to avoid conflicts
-                unique_filename = f"upload_{int(time.time())}_{i}{original_ext}"
-                file_path = os.path.join(temp_dir, unique_filename)
-                
-                # Write file content
-                with open(file_path, "wb") as buffer:
-                    content = await file.read()
-                    buffer.write(content)
-                
-                uploaded_paths.append(file_path)
+        # Get the form data directly from the request
+        form_data = await request.form()
+        
+        i = 0
+        for field_name, field_value in form_data.items():
+            if isinstance(field_value, StarletteUploadFile):
+                if field_value.filename:
+                    # Get original extension
+                    original_ext = os.path.splitext(field_value.filename)[1].lower()
+                    
+                    # Create a unique filename similar to how Gradio handles uploads
+                    unique_filename = f"upload_{int(time.time())}_{i}{original_ext}"
+                    file_path = os.path.join(temp_dir, unique_filename)
+                    
+                    # Write file content
+                    content = await field_value.read()
+                    with open(file_path, "wb") as buffer:
+                        buffer.write(content)
+                    
+                    uploaded_paths.append(file_path)
+                    i += 1
         
         return {
             "success": True,
@@ -960,6 +979,8 @@ async def upload_files(files: List[UploadFile] = File(...)):
             "temp_directory": temp_dir
         }
     except Exception as e:
+        import traceback
+        print(f"Upload error: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/generate_captions")
