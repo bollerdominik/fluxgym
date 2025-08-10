@@ -21,6 +21,8 @@ from argparse import Namespace
 import train_network
 import toml
 import re
+from datetime import datetime
+from api_wrapper import initialize_api
 MAX_IMAGES = 150
 
 with open('models.yaml', 'r') as file:
@@ -573,6 +575,9 @@ def start_training(
     train_config,
     sample_prompts,
 ):
+    from api_wrapper import get_api_instance
+    api = get_api_instance()
+    
     # write custom script and toml
     if not os.path.exists("models"):
         os.makedirs("models", exist_ok=True)
@@ -582,6 +587,16 @@ def start_training(
     output_dir = resolve_path_without_quotes(f"outputs/{output_name}")
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
+
+    # Update API status - preparing
+    if api:
+        api.update_training_status(
+            status="preparing",
+            current_lora=lora_name,
+            start_time=datetime.now(),
+            output_dir=output_dir,
+            error_message=None
+        )
 
     download(base_model)
 
@@ -595,7 +610,6 @@ def start_training(
         file.write(train_script)
     gr.Info(f"Generated train script at {sh_filename}")
 
-
     dataset_path = resolve_path_without_quotes(f"outputs/{output_name}/dataset.toml")
     with open(dataset_path, 'w', encoding="utf-8") as file:
         file.write(train_config)
@@ -606,11 +620,24 @@ def start_training(
         file.write(sample_prompts)
     gr.Info(f"Generated sample_prompts.txt")
 
+    # Parse total epochs from config for API status
+    try:
+        config = toml.loads(train_config)
+        total_epochs = int(train_script.split("--max_train_epochs")[1].split()[0]) if "--max_train_epochs" in train_script else 0
+        if api:
+            api.update_training_status(total_epochs=total_epochs)
+    except:
+        pass
+
     # Train
     if sys.platform == "win32":
         command = sh_filepath
     else:
         command = f"bash \"{sh_filepath}\""
+
+    # Update API status - training started
+    if api:
+        api.update_training_status(status="training")
 
     # Use Popen to run the command and capture output in real-time
     env = os.environ.copy()
@@ -619,24 +646,82 @@ def start_training(
     runner = LogsViewRunner()
     cwd = os.path.dirname(os.path.abspath(__file__))
     gr.Info(f"Started training")
-    yield from runner.run_command([command], cwd=cwd)
-    yield runner.log(f"Runner: {runner}")
+    
+    try:
+        for log_line in runner.run_command([command], cwd=cwd):
+            # Update API status with log information
+            if api and log_line:
+                # Parse training progress from logs if possible
+                log_text = str(log_line)
+                if "epoch:" in log_text.lower():
+                    try:
+                        # Extract epoch info (this is a simple parser, might need refinement)
+                        parts = log_text.split("epoch:")
+                        if len(parts) > 1:
+                            epoch_part = parts[1].strip().split()[0]
+                            current_epoch = int(epoch_part.split('/')[0]) if '/' in epoch_part else int(epoch_part)
+                            api.update_training_status(current_epoch=current_epoch)
+                    except:
+                        pass
+                if "step:" in log_text.lower():
+                    try:
+                        # Extract step info
+                        parts = log_text.split("step:")
+                        if len(parts) > 1:
+                            step_part = parts[1].strip().split()[0]
+                            current_step = int(step_part)
+                            api.update_training_status(current_step=current_step)
+                    except:
+                        pass
+                if "loss:" in log_text.lower():
+                    try:
+                        # Extract loss info
+                        parts = log_text.split("loss:")
+                        if len(parts) > 1:
+                            loss_part = parts[1].strip().split()[0]
+                            loss = float(loss_part)
+                            api.update_training_status(loss=loss)
+                    except:
+                        pass
+                
+                api.update_training_status(last_log=log_text[:500])  # Keep last log, truncated
+            yield log_line
+        
+        yield runner.log(f"Runner: {runner}")
 
-    # Generate Readme
-    config = toml.loads(train_config)
-    concept_sentence = config['datasets'][0]['subsets'][0]['class_tokens']
-    print(f"concept_sentence={concept_sentence}")
-    print(f"lora_name {lora_name}, concept_sentence={concept_sentence}, output_name={output_name}")
-    sample_prompts_path = resolve_path_without_quotes(f"outputs/{output_name}/sample_prompts.txt")
-    with open(sample_prompts_path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-    sample_prompts = [line.strip() for line in lines if len(line.strip()) > 0 and line[0] != "#"]
-    md = readme(base_model, lora_name, concept_sentence, sample_prompts)
-    readme_path = resolve_path_without_quotes(f"outputs/{output_name}/README.md")
-    with open(readme_path, "w", encoding="utf-8") as f:
-        f.write(md)
+        # Generate Readme
+        config = toml.loads(train_config)
+        concept_sentence = config['datasets'][0]['subsets'][0]['class_tokens']
+        print(f"concept_sentence={concept_sentence}")
+        print(f"lora_name {lora_name}, concept_sentence={concept_sentence}, output_name={output_name}")
+        sample_prompts_path = resolve_path_without_quotes(f"outputs/{output_name}/sample_prompts.txt")
+        with open(sample_prompts_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        sample_prompts = [line.strip() for line in lines if len(line.strip()) > 0 and line[0] != "#"]
+        md = readme(base_model, lora_name, concept_sentence, sample_prompts)
+        readme_path = resolve_path_without_quotes(f"outputs/{output_name}/README.md")
+        with open(readme_path, "w", encoding="utf-8") as f:
+            f.write(md)
 
-    gr.Info(f"Training Complete. Check the outputs folder for the LoRA files.", duration=None)
+        # Update API status - completed
+        if api:
+            api.update_training_status(
+                status="completed",
+                end_time=datetime.now()
+            )
+
+        gr.Info(f"Training Complete. Check the outputs folder for the LoRA files.", duration=None)
+    
+    except Exception as e:
+        # Update API status - error
+        if api:
+            api.update_training_status(
+                status="error",
+                error_message=str(e),
+                end_time=datetime.now()
+            )
+        gr.Error(f"Training failed: {str(e)}")
+        raise
 
 
 def update(
@@ -1116,4 +1201,14 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
     refresh.click(update, inputs=listeners, outputs=[train_script, train_config, dataset_folder])
 if __name__ == "__main__":
     cwd = os.path.dirname(os.path.abspath(__file__))
+    
+    # Initialize and start API wrapper
+    api = initialize_api(demo)
+    api.start_server(host='0.0.0.0', port=7861)
+    print("API endpoints available:")
+    print("  - GET /status - Training status")
+    print("  - GET /health - Health check")
+    print("  - GET /models - Available models")
+    print("  - GET /outputs - Trained LoRAs")
+    
     demo.launch(debug=True, show_error=True, allowed_paths=[cwd])
