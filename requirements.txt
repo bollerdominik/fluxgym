@@ -33,5 +33,3 @@ gradio
 python-slugify
 imagesize
 pydantic==2.9.2
-flask
-psutil
