@@ -1399,6 +1399,9 @@ if __name__ == "__main__":
     # Mount Gradio app on FastAPI
     cwd = os.path.dirname(os.path.abspath(__file__))
     gradio_app = gr.mount_gradio_app(app, demo, path="/", allowed_paths=[cwd])
-    
+
+    # Use environment variable for port, fallback to 7860 for local development
+    port = int(os.environ.get("GRADIO_SERVER_PORT", 7860))
+
     # Run the combined app
-    uvicorn.run(gradio_app, host="0.0.0.0", port=7860)
+    uvicorn.run(gradio_app, host="0.0.0.0", port=port)
