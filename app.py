@@ -27,6 +27,7 @@ from fastapi.responses import JSONResponse
 from typing import List, Optional
 from pydantic import BaseModel
 import tempfile
+import requests
 MAX_IMAGES = 150
 
 with open('models.yaml', 'r') as file:
@@ -909,6 +910,9 @@ class ImageCaptionPair(BaseModel):
     full_path: str
     caption: str
 
+class DownloadRequest(BaseModel):
+    urls: List[str]
+
 class TrainingRequest(BaseModel):
     temp_directory: str
     image_caption_pairs: List[ImageCaptionPair]
@@ -959,6 +963,61 @@ async def upload_files(files: List[UploadFile] = File(...)):
             "uploaded_files": uploaded_paths,
             "temp_directory": temp_dir
         })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/download_files")
+async def download_files(request: DownloadRequest):
+    """Download files from HTTP URLs and return their paths with unique naming similar to Gradio."""
+    try:
+        downloaded_paths = []
+        temp_dir = tempfile.mkdtemp()
+        
+        for i, url in enumerate(request.urls):
+            # Download file from URL
+            response = requests.get(url, stream=True, timeout=30)
+            response.raise_for_status()
+            
+            # Try to get filename from URL or Content-Disposition header
+            filename = None
+            if 'Content-Disposition' in response.headers:
+                content_disposition = response.headers['Content-Disposition']
+                if 'filename=' in content_disposition:
+                    filename = content_disposition.split('filename=')[1].strip('"')
+            
+            if not filename:
+                # Extract filename from URL
+                from urllib.parse import urlparse
+                parsed_url = urlparse(url)
+                filename = os.path.basename(parsed_url.path)
+                if not filename or '.' not in filename:
+                    # Default to a generic name with common image extension
+                    filename = f"downloaded_file_{i}.jpg"
+            
+            # Get original extension
+            original_ext = os.path.splitext(filename)[1].lower()
+            if not original_ext:
+                original_ext = ".jpg"  # Default extension for images
+            
+            # Create a unique filename similar to how Gradio handles uploads
+            unique_filename = f"download_{int(time.time())}_{i}{original_ext}"
+            file_path = os.path.join(temp_dir, unique_filename)
+            
+            # Write file content
+            with open(file_path, "wb") as buffer:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        buffer.write(chunk)
+            
+            downloaded_paths.append(file_path)
+        
+        return JSONResponse({
+            "success": True,
+            "uploaded_files": downloaded_paths,
+            "temp_directory": temp_dir
+        })
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=400, detail=f"Failed to download from URL: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
