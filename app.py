@@ -580,70 +580,112 @@ def start_training(
     train_config,
     sample_prompts,
 ):
-    # write custom script and toml
-    if not os.path.exists("models"):
-        os.makedirs("models", exist_ok=True)
-    if not os.path.exists("outputs"):
-        os.makedirs("outputs", exist_ok=True)
-    output_name = slugify(lora_name)
-    output_dir = resolve_path_without_quotes(f"outputs/{output_name}")
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir, exist_ok=True)
+    global training_status
+    
+    # Update training status
+    training_status.update({
+        "is_training": True,
+        "current_lora": lora_name,
+        "progress": 0,
+        "status_message": "Initializing training...",
+        "start_time": time.time(),
+        "current_epoch": 0
+    })
+    
+    try:
+        # Parse config to get total epochs for progress tracking
+        config_data = toml.loads(train_config)
+        # We'll set total_epochs when we have the epoch info
+        
+        # write custom script and toml
+        if not os.path.exists("models"):
+            os.makedirs("models", exist_ok=True)
+        if not os.path.exists("outputs"):
+            os.makedirs("outputs", exist_ok=True)
+        output_name = slugify(lora_name)
+        output_dir = resolve_path_without_quotes(f"outputs/{output_name}")
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
 
-    download(base_model)
+        training_status["status_message"] = "Downloading models..."
+        download(base_model)
 
-    file_type = "sh"
-    if sys.platform == "win32":
-        file_type = "bat"
+        file_type = "sh"
+        if sys.platform == "win32":
+            file_type = "bat"
 
-    sh_filename = f"train.{file_type}"
-    sh_filepath = resolve_path_without_quotes(f"outputs/{output_name}/{sh_filename}")
-    with open(sh_filepath, 'w', encoding="utf-8") as file:
-        file.write(train_script)
-    gr.Info(f"Generated train script at {sh_filename}")
+        sh_filename = f"train.{file_type}"
+        sh_filepath = resolve_path_without_quotes(f"outputs/{output_name}/{sh_filename}")
+        with open(sh_filepath, 'w', encoding="utf-8") as file:
+            file.write(train_script)
+        gr.Info(f"Generated train script at {sh_filename}")
 
 
-    dataset_path = resolve_path_without_quotes(f"outputs/{output_name}/dataset.toml")
-    with open(dataset_path, 'w', encoding="utf-8") as file:
-        file.write(train_config)
-    gr.Info(f"Generated dataset.toml")
+        dataset_path = resolve_path_without_quotes(f"outputs/{output_name}/dataset.toml")
+        with open(dataset_path, 'w', encoding="utf-8") as file:
+            file.write(train_config)
+        gr.Info(f"Generated dataset.toml")
 
-    sample_prompts_path = resolve_path_without_quotes(f"outputs/{output_name}/sample_prompts.txt")
-    with open(sample_prompts_path, 'w', encoding='utf-8') as file:
-        file.write(sample_prompts)
-    gr.Info(f"Generated sample_prompts.txt")
+        sample_prompts_path = resolve_path_without_quotes(f"outputs/{output_name}/sample_prompts.txt")
+        with open(sample_prompts_path, 'w', encoding='utf-8') as file:
+            file.write(sample_prompts)
+        gr.Info(f"Generated sample_prompts.txt")
 
-    # Train
-    if sys.platform == "win32":
-        command = sh_filepath
-    else:
-        command = f"bash \"{sh_filepath}\""
+        # Train
+        if sys.platform == "win32":
+            command = sh_filepath
+        else:
+            command = f"bash \"{sh_filepath}\""
 
-    # Use Popen to run the command and capture output in real-time
-    env = os.environ.copy()
-    env['PYTHONIOENCODING'] = 'utf-8'
-    env['LOG_LEVEL'] = 'DEBUG'
-    runner = LogsViewRunner()
-    cwd = os.path.dirname(os.path.abspath(__file__))
-    gr.Info(f"Started training")
-    yield from runner.run_command([command], cwd=cwd)
-    yield runner.log(f"Runner: {runner}")
+        # Use Popen to run the command and capture output in real-time
+        env = os.environ.copy()
+        env['PYTHONIOENCODING'] = 'utf-8'
+        env['LOG_LEVEL'] = 'DEBUG'
+        runner = LogsViewRunner()
+        cwd = os.path.dirname(os.path.abspath(__file__))
+        training_status["status_message"] = "Training started..."
+        gr.Info(f"Started training")
+        yield from runner.run_command([command], cwd=cwd)
+        yield runner.log(f"Runner: {runner}")
 
-    # Generate Readme
-    config = toml.loads(train_config)
-    concept_sentence = config['datasets'][0]['subsets'][0]['class_tokens']
-    print(f"concept_sentence={concept_sentence}")
-    print(f"lora_name {lora_name}, concept_sentence={concept_sentence}, output_name={output_name}")
-    sample_prompts_path = resolve_path_without_quotes(f"outputs/{output_name}/sample_prompts.txt")
-    with open(sample_prompts_path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-    sample_prompts = [line.strip() for line in lines if len(line.strip()) > 0 and line[0] != "#"]
-    md = readme(base_model, lora_name, concept_sentence, sample_prompts)
-    readme_path = resolve_path_without_quotes(f"outputs/{output_name}/README.md")
-    with open(readme_path, "w", encoding="utf-8") as f:
-        f.write(md)
+        training_status["status_message"] = "Generating README..."
+        # Generate Readme
+        config = toml.loads(train_config)
+        concept_sentence = config['datasets'][0]['subsets'][0]['class_tokens']
+        print(f"concept_sentence={concept_sentence}")
+        print(f"lora_name {lora_name}, concept_sentence={concept_sentence}, output_name={output_name}")
+        sample_prompts_path = resolve_path_without_quotes(f"outputs/{output_name}/sample_prompts.txt")
+        with open(sample_prompts_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        sample_prompts = [line.strip() for line in lines if len(line.strip()) > 0 and line[0] != "#"]
+        md = readme(base_model, lora_name, concept_sentence, sample_prompts)
+        readme_path = resolve_path_without_quotes(f"outputs/{output_name}/README.md")
+        with open(readme_path, "w", encoding="utf-8") as f:
+            f.write(md)
 
-    gr.Info(f"Training Complete. Check the outputs folder for the LoRA files.", duration=None)
+        # Reset training status
+        training_status.update({
+            "is_training": False,
+            "current_lora": None,
+            "progress": 100,
+            "status_message": "Training completed successfully",
+            "current_epoch": 0,
+            "total_epochs": 0
+        })
+        
+        gr.Info(f"Training Complete. Check the outputs folder for the LoRA files.", duration=None)
+    
+    except Exception as e:
+        # Reset training status on error
+        training_status.update({
+            "is_training": False,
+            "current_lora": None,
+            "progress": 0,
+            "status_message": f"Training failed: {str(e)}",
+            "current_epoch": 0,
+            "total_epochs": 0
+        })
+        raise e
 
 
 def update(
@@ -897,6 +939,18 @@ function() {
 current_account = account_hf()
 print(f"current_account={current_account}")
 
+# Global training status tracking
+training_status = {
+    "is_training": False,
+    "current_lora": None,
+    "progress": 0,
+    "status_message": "Idle",
+    "start_time": None,
+    "estimated_completion": None,
+    "current_epoch": 0,
+    "total_epochs": 0
+}
+
 # FastAPI app for API endpoints
 app = FastAPI(title="FluxGym API", version="1.0.0")
 
@@ -1131,6 +1185,10 @@ async def api_start_training(request: TrainingRequest):
         from concurrent.futures import ThreadPoolExecutor
         
         def run_training():
+            global training_status
+            # Update training status with total epochs from request
+            training_status["total_epochs"] = request.max_train_epochs
+            
             # Create a generator from start_training and consume it
             training_generator = start_training(
                 request.base_model,
@@ -1158,6 +1216,14 @@ async def api_start_training(request: TrainingRequest):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/training_status")
+async def get_training_status():
+    """Get the current training status."""
+    return JSONResponse({
+        "success": True,
+        "training_status": training_status
+    })
 
 with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
     with gr.Tabs() as tabs:
