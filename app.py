@@ -23,7 +23,7 @@ import train_network
 import toml
 import re
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from typing import List, Optional
 from pydantic import BaseModel
 import tempfile
@@ -1224,6 +1224,63 @@ async def get_training_status():
         "success": True,
         "training_status": training_status
     })
+
+@app.get("/api/download_lora/{lora_name}")
+async def download_lora(lora_name: str):
+    """Download the main safetensors file for a given LoRA name."""
+    try:
+        # Sanitize the lora_name to prevent directory traversal
+        safe_lora_name = slugify(lora_name)
+        outputs_dir = os.path.join(os.getcwd(), "outputs", safe_lora_name)
+        
+        if not os.path.exists(outputs_dir):
+            raise HTTPException(status_code=404, detail=f"LoRA '{lora_name}' not found")
+        
+        # Find all .safetensors files in the directory
+        safetensors_files = []
+        for file in os.listdir(outputs_dir):
+            if file.endswith('.safetensors'):
+                safetensors_files.append(file)
+        
+        if not safetensors_files:
+            raise HTTPException(status_code=404, detail=f"No safetensors files found for LoRA '{lora_name}'")
+        
+        # Prioritize the final LoRA file (without step count) over step files
+        final_file = None
+        step_files = []
+        
+        for file in safetensors_files:
+            # Check if this is a step file (contains -000xxx pattern)
+            if re.search(r'-\d+\.safetensors$', file):
+                match = re.search(r'-(\d+)\.safetensors$', file)
+                if match:
+                    step_files.append((int(match.group(1)), file))
+            else:
+                # This is likely the final LoRA file
+                final_file = file
+        
+        # Use final file if available, otherwise use the highest step count file
+        if final_file:
+            main_file = final_file
+        elif step_files:
+            # Sort by step count and get the highest
+            step_files.sort(key=lambda x: x[0], reverse=True)
+            main_file = step_files[0][1]
+        else:
+            main_file = safetensors_files[0]
+        
+        file_path = os.path.join(outputs_dir, main_file)
+        
+        return FileResponse(
+            path=file_path,
+            media_type='application/octet-stream',
+            filename=main_file
+        )
+        
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Error downloading LoRA: {str(e)}")
 
 with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
     with gr.Tabs() as tabs:
