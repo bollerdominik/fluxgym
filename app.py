@@ -954,11 +954,11 @@ async def upload_files(files: List[UploadFile] = File(...)):
                 
                 uploaded_paths.append(file_path)
         
-        return {
+        return JSONResponse({
             "success": True,
             "uploaded_files": uploaded_paths,
             "temp_directory": temp_dir
-        }
+        })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1000,11 +1000,11 @@ async def generate_captions(request: CaptionRequest):
                 "caption": final_captions[i]
             })
         
-        return {
+        return JSONResponse({
             "success": True,
             "image_caption_pairs": image_caption_pairs,
             "concept_sentence": request.concept_sentence
-        }
+        })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1088,14 +1088,14 @@ async def api_start_training(request: TrainingRequest):
         executor = ThreadPoolExecutor(max_workers=1)
         asyncio.get_event_loop().run_in_executor(executor, run_training)
         
-        return {
+        return JSONResponse({
             "success": True,
             "message": "Training started successfully",
             "lora_name": request.lora_name,
             "output_name": output_name,
             "dataset_folder": dataset_path,
             "expected_output": f"outputs/{output_name}/"
-        }
+        })
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
