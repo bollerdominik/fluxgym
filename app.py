@@ -581,6 +581,7 @@ def start_training(
     sample_prompts,
 ):
     global training_status
+    global current_training_runner
     
     # Update training status
     training_status.update({
@@ -642,6 +643,7 @@ def start_training(
         env['PYTHONIOENCODING'] = 'utf-8'
         env['LOG_LEVEL'] = 'DEBUG'
         runner = LogsViewRunner()
+        current_training_runner = runner  # Store reference for stopping
         cwd = os.path.dirname(os.path.abspath(__file__))
         training_status["status_message"] = "Training started..."
         gr.Info(f"Started training")
@@ -672,6 +674,7 @@ def start_training(
             "current_epoch": 0,
             "total_epochs": 0
         })
+        current_training_runner = None
         
         gr.Info(f"Training Complete. Check the outputs folder for the LoRA files.", duration=None)
     
@@ -685,6 +688,7 @@ def start_training(
             "current_epoch": 0,
             "total_epochs": 0
         })
+        current_training_runner = None
         raise e
 
 
@@ -951,6 +955,9 @@ training_status = {
     "total_epochs": 0
 }
 
+# Global training process tracking
+current_training_runner = None
+
 # FastAPI app for API endpoints
 app = FastAPI(title="FluxGym API", version="1.0.0")
 
@@ -1186,6 +1193,7 @@ async def api_start_training(request: TrainingRequest):
         
         def run_training():
             global training_status
+            global current_training_runner
             # Update training status with total epochs from request
             training_status["total_epochs"] = request.max_train_epochs
             
@@ -1224,6 +1232,76 @@ async def get_training_status():
         "success": True,
         "training_status": training_status
     })
+
+@app.post("/api/stop_training")
+async def stop_training():
+    """Stop/abort the currently running training process."""
+    global training_status
+    global current_training_runner
+    
+    try:
+        if not training_status["is_training"]:
+            return JSONResponse({
+                "success": False,
+                "message": "No training is currently running"
+            }, status_code=400)
+        
+        # Stop the training runner if it exists
+        if current_training_runner:
+            try:
+                # Try to terminate the underlying process
+                if current_training_runner.process:
+                    if hasattr(current_training_runner.process, 'terminate'):
+                        current_training_runner.process.terminate()
+                        # Give it a moment to terminate gracefully
+                        try:
+                            current_training_runner.process.wait(timeout=5)
+                        except:
+                            # If it doesn't terminate gracefully, kill it
+                            if hasattr(current_training_runner.process, 'kill'):
+                                current_training_runner.process.kill()
+                else:
+                    raise Exception("No active process found in runner")
+                training_status.update({
+                    "is_training": False,
+                    "current_lora": None,
+                    "progress": 0,
+                    "status_message": "Training aborted by user",
+                    "current_epoch": 0,
+                    "total_epochs": 0
+                })
+                current_training_runner = None
+                
+                return JSONResponse({
+                    "success": True,
+                    "message": "Training stopped successfully"
+                })
+            except Exception as e:
+                return JSONResponse({
+                    "success": False,
+                    "message": f"Failed to stop training: {str(e)}"
+                }, status_code=500)
+        else:
+            # No runner found, but training status shows active - reset status
+            training_status.update({
+                "is_training": False,
+                "current_lora": None,
+                "progress": 0,
+                "status_message": "Training process not found - status reset",
+                "current_epoch": 0,
+                "total_epochs": 0
+            })
+            
+            return JSONResponse({
+                "success": True,
+                "message": "Training status reset (no active process found)"
+            })
+            
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "message": f"Error stopping training: {str(e)}"
+        }, status_code=500)
 
 @app.get("/api/download_lora/{lora_name}")
 async def download_lora(lora_name: str):
