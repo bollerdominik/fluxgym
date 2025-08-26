@@ -958,6 +958,10 @@ training_status = {
 # Global training process tracking
 current_training_runner = None
 
+# Global captioning task tracking
+captioning_tasks = {}
+captioning_task_counter = 0
+
 # FastAPI app for API endpoints
 app = FastAPI(title="FluxGym API", version="1.0.0")
 
@@ -1082,9 +1086,62 @@ async def download_files(request: DownloadRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def run_captioning_task(task_id: str, image_paths: list, concept_sentence: str):
+    """Background task function to run captioning process."""
+    global captioning_tasks
+    
+    try:
+        # Update task status
+        captioning_tasks[task_id]["status"] = "processing"
+        captioning_tasks[task_id]["progress"] = 0
+        
+        # Initialize captions list
+        captions = [""] * len(image_paths)
+        
+        # Call the existing run_captioning function
+        final_captions = []
+        total_images = len(image_paths)
+        
+        for i, caption_result in enumerate(run_captioning(image_paths, concept_sentence or "", *captions)):
+            final_captions = list(caption_result)
+            # Update progress
+            progress = int((i + 1) / total_images * 100)
+            captioning_tasks[task_id]["progress"] = progress
+        
+        # Create explicit image-caption pairs
+        image_caption_pairs = []
+        for i, image_path in enumerate(image_paths):
+            image_caption_pairs.append({
+                "filename": os.path.basename(image_path),
+                "full_path": image_path,
+                "caption": final_captions[i]
+            })
+        
+        # Mark task as completed
+        captioning_tasks[task_id].update({
+            "status": "completed",
+            "progress": 100,
+            "result": {
+                "success": True,
+                "image_caption_pairs": image_caption_pairs,
+                "concept_sentence": concept_sentence
+            }
+        })
+        
+    except Exception as e:
+        # Mark task as failed
+        captioning_tasks[task_id].update({
+            "status": "failed",
+            "progress": 0,
+            "error": str(e)
+        })
+
 @app.post("/api/generate_captions")
 async def generate_captions(request: CaptionRequest):
-    """Generate captions for uploaded images using run_captioning."""
+    """Start captioning process and return task ID immediately."""
+    global captioning_task_counter
+    global captioning_tasks
+    
     try:
         # Verify temp directory exists
         if not os.path.exists(request.temp_directory):
@@ -1103,30 +1160,70 @@ async def generate_captions(request: CaptionRequest):
         # Sort for consistent ordering
         valid_image_paths.sort()
         
-        # Initialize captions list
-        captions = [""] * len(valid_image_paths)
+        # Create new task
+        captioning_task_counter += 1
+        task_id = f"caption_task_{captioning_task_counter}"
         
-        # Call the existing run_captioning function
-        final_captions = []
-        for caption_result in run_captioning(valid_image_paths, request.concept_sentence or "", *captions):
-            final_captions = list(caption_result)
+        captioning_tasks[task_id] = {
+            "status": "starting",
+            "progress": 0,
+            "created_at": time.time(),
+            "temp_directory": request.temp_directory,
+            "concept_sentence": request.concept_sentence,
+            "image_count": len(valid_image_paths)
+        }
         
-        # Create explicit image-caption pairs
-        image_caption_pairs = []
-        for i, image_path in enumerate(valid_image_paths):
-            image_caption_pairs.append({
-                "filename": os.path.basename(image_path),
-                "full_path": image_path,
-                "caption": final_captions[i]
-            })
+        # Start background task
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        
+        executor = ThreadPoolExecutor(max_workers=1)
+        asyncio.get_event_loop().run_in_executor(
+            executor, 
+            run_captioning_task, 
+            task_id, 
+            valid_image_paths, 
+            request.concept_sentence or ""
+        )
         
         return JSONResponse({
             "success": True,
-            "image_caption_pairs": image_caption_pairs,
-            "concept_sentence": request.concept_sentence
+            "task_id": task_id,
+            "status": "started",
+            "image_count": len(valid_image_paths)
         })
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/generate_captions/status")
+async def get_caption_status(task_id: str):
+    """Get the status of a captioning task."""
+    global captioning_tasks
+    
+    if task_id not in captioning_tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    task = captioning_tasks[task_id]
+    
+    response_data = {
+        "success": True,
+        "task_id": task_id,
+        "status": task["status"],
+        "progress": task["progress"],
+        "created_at": task["created_at"],
+        "image_count": task["image_count"]
+    }
+    
+    # Add result data if completed
+    if task["status"] == "completed" and "result" in task:
+        response_data.update(task["result"])
+    
+    # Add error data if failed
+    if task["status"] == "failed" and "error" in task:
+        response_data["error"] = task["error"]
+    
+    return JSONResponse(response_data)
 
 @app.post("/api/start_training")
 async def api_start_training(request: TrainingRequest):
