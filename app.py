@@ -531,7 +531,7 @@ keep_tokens = 1
 
 [[datasets]]
 resolution = {resolution}
-batch_size = 1
+batch_size = 2
 keep_tokens = 1
 
   [[datasets.subsets]]
