@@ -984,9 +984,9 @@ class TrainingRequest(BaseModel):
     lora_name: str
     concept_sentence: str
     base_model: str = "flux-dev"
-    resolution: int = 512
+    resolution: int = 768
     num_repeats: int = 10
-    max_train_epochs: int = 16
+    max_train_epochs: int = 12
     vram: str = "20G"
     sample_prompts: str = ""
     sample_every_n_steps: int = 0
@@ -1495,7 +1495,7 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
                     total_steps = gr.Number(0, interactive=False, label="Expected training steps")
                     sample_prompts = gr.Textbox("", lines=5, label="Sample Image Prompts (Separate with new lines)", interactive=True)
                     sample_every_n_steps = gr.Number(0, precision=0, label="Sample Image Every N Steps", interactive=True)
-                    resolution = gr.Number(value=512, precision=0, label="Resize dataset images")
+                    resolution = gr.Number(value=768, precision=0, label="Resize dataset images")
                 with gr.Column():
                     gr.Markdown(
                         """# Step 2. Dataset
