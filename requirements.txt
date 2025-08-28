@@ -1,3 +1,4 @@
+scipy==1.15.3
 safetensors
 git+https://github.com/huggingface/diffusers.git
 gradio_logsview@https://huggingface.co/spaces/cocktailpeanut/gradio_logsview/resolve/main/gradio_logsview-0.0.17-py3-none-any.whl
