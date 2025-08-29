@@ -987,7 +987,7 @@ class TrainingRequest(BaseModel):
     base_model: str = "flux-dev"
     resolution: int = 768
     num_repeats: int = 10
-    max_train_epochs: int = 12
+    max_train_epochs: int = 16
     vram: str = "20G"
     sample_prompts: str = ""
     sample_every_n_steps: int = 0
