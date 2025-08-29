@@ -489,6 +489,7 @@ def gen_sh(
   --timestep_sampling {timestep_sampling} {line_break}
   --discrete_flow_shift 3.1582 {line_break}
   --model_prediction_type raw {line_break}
+  --train_batch_size 2 {line_break}
   --guidance_scale {guidance_scale} {line_break}
   --loss_type l2 {line_break}"""
    
