@@ -610,7 +610,9 @@ def start_training(
             os.makedirs(output_dir, exist_ok=True)
 
         training_status["status_message"] = "Downloading models..."
+        print(f"[FLUXGYM] Downloading base model: {base_model}")
         download(base_model)
+        print(f"[FLUXGYM] Base model download completed")
 
         file_type = "sh"
         if sys.platform == "win32":
@@ -648,10 +650,27 @@ def start_training(
         cwd = os.path.dirname(os.path.abspath(__file__))
         training_status["status_message"] = "Training started..."
         gr.Info(f"Started training")
-        yield from runner.run_command([command], cwd=cwd)
+        
+        # Print training command to console
+        print(f"[FLUXGYM] Starting training with command: {command}")
+        print(f"[FLUXGYM] Working directory: {cwd}")
+        print(f"[FLUXGYM] Training LoRA: {lora_name}")
+        print("=" * 80)
+        
+        # Run command and print logs to both UI and console
+        for logs in runner.run_command([command], cwd=cwd):
+            for log in logs:
+                # Print to console with timestamp and level
+                console_message = f"[{log.timestamp}] [{log.level}] {log.message}"
+                print(console_message)
+            yield logs
+        
         yield runner.log(f"Runner: {runner}")
+        print("=" * 80)
+        print(f"[FLUXGYM] Training completed for LoRA: {lora_name}")
 
         training_status["status_message"] = "Generating README..."
+        print(f"[FLUXGYM] Generating README for LoRA: {lora_name}")
         # Generate Readme
         config = toml.loads(train_config)
         concept_sentence = config['datasets'][0]['subsets'][0]['class_tokens']
@@ -677,10 +696,15 @@ def start_training(
         })
         current_training_runner = None
         
+        print(f"[FLUXGYM] Training pipeline completed successfully!")
+        print(f"[FLUXGYM] LoRA files available in: outputs/{output_name}/")
+        print("=" * 80)
         gr.Info(f"Training Complete. Check the outputs folder for the LoRA files.", duration=None)
     
     except Exception as e:
         # Reset training status on error
+        print(f"[FLUXGYM] Training failed with error: {str(e)}")
+        print("=" * 80)
         training_status.update({
             "is_training": False,
             "current_lora": None,
