@@ -225,6 +225,16 @@ def hide_captioning():
 
 def resize_image(image_path, output_path, size):
     with Image.open(image_path) as img:
+        # Convert RGBA to RGB if necessary (for JPEG compatibility)
+        if img.mode == 'RGBA':
+            # Create white background and paste image on it
+            rgb_img = Image.new('RGB', img.size, (255, 255, 255))
+            rgb_img.paste(img, mask=img.split()[-1])  # Use alpha channel as mask
+            img = rgb_img
+        elif img.mode not in ['RGB', 'L']:
+            # Convert other modes to RGB
+            img = img.convert('RGB')
+            
         width, height = img.size
         if width < height:
             new_width = size
