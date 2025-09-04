@@ -1345,6 +1345,8 @@ async def api_start_training(request: TrainingRequest):
         })
         
     except Exception as e:
+        # log error
+        print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/training_status")
