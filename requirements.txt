@@ -32,7 +32,7 @@ pytorch_fid
 optimum-quanto
 sentencepiece
 huggingface_hub
-peft
+peft==0.17.1
 gradio
 python-slugify
 imagesize
