@@ -39,3 +39,4 @@ imagesize
 pydantic==2.9.2
 fastapi
 uvicorn[standard]
+wandb>=0.13.0
